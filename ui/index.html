@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RayBPS4 Installer</title>
+<style>
+  body { margin: 0; padding: 16px; background: #10131a; color: #e8ecf4; font-family: Arial, Helvetica, sans-serif; font-size: 18px; }
+  h1 { font-size: 26px; margin: 0 0 12px 0; }
+  h2 { font-size: 20px; margin: 22px 0 8px 0; color: #9db4ff; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 12px; font-size: 18px; border: 1px solid #3a4560; background: #1a2030; color: #fff; border-radius: 6px; }
+  button { padding: 12px 18px; margin: 8px 8px 0 0; font-size: 18px; border: 0; border-radius: 6px; background: #3b6cf6; color: #fff; cursor: pointer; }
+  button.gray { background: #3a4560; }
+  button.red { background: #b3402f; }
+  .msg { margin-top: 10px; min-height: 24px; color: #ffd37a; word-wrap: break-word; }
+  .card { background: #1a2030; border-radius: 8px; padding: 12px; margin-top: 10px; }
+  .title { font-weight: bold; word-wrap: break-word; }
+  .small { color: #9aa6c0; font-size: 15px; margin-top: 4px; word-wrap: break-word; }
+  .bar { height: 14px; background: #2a3248; border-radius: 7px; margin-top: 8px; overflow: hidden; }
+  .fill { height: 14px; background: #44c46b; width: 0%; }
+  .hint { color: #9aa6c0; font-size: 15px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>RayBPS4 Installer</h1>
+
+<div>Ссылка на .pkg (прямая, http/https):</div>
+<input type="text" id="url" placeholder="http://... .pkg" autocomplete="off" autocapitalize="off">
+<button id="btnInstall">Установить</button>
+<button id="btnSave" class="gray">Сохранить ссылку</button>
+<div class="msg" id="msg"></div>
+<div class="hint">Magnet-ссылки и .torrent здесь не работают: консоль скачивает только по прямой ссылке.</div>
+
+<h2>Задачи</h2>
+<div id="tasks"><div class="small">Пока пусто.</div></div>
+
+<h2>Сохранённые ссылки</h2>
+<div id="saved"><div class="small">Пока пусто.</div></div>
+
+<script>
+(function () {
+  var KEY_TASKS = 'rbps4_tasks';
+  var KEY_SAVED = 'rbps4_saved';
+
+  function $(id) { return document.getElementById(id); }
+
+  function load(key) {
+    try {
+      var raw = window.localStorage.getItem(key);
+      if (!raw) { return []; }
+      var v = JSON.parse(raw);
+      return (v && v.length !== undefined) ? v : [];
+    } catch (e) { return []; }
+  }
+  function store(key, value) {
+    try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+  }
+
+  var tasks = load(KEY_TASKS);
+  var saved = load(KEY_SAVED);
+  var states = {};
+
+  function setMsg(text) { $('msg').textContent = text; }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Sends a POST request; the callback gets (ok, data, rawText).
+  function api(path, body, cb) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', path, true);
+    xhr.setRequestHeader('Content-Type', 'text/plain');
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) { return; }
+      var text = xhr.responseText || '';
+      // The console returns numbers like 0x1A2B, which is not valid JSON.
+      var fixed = text.replace(/0x([0-9A-Fa-f]+)/g, function (m, h) { return parseInt(h, 16); });
+      var data = null;
+      try { data = JSON.parse(fixed); } catch (e) { data = null; }
+      cb(xhr.status === 200 && data !== null && data.status === 'success', data, text);
+    };
+    xhr.onerror = function () { cb(false, null, ''); };
+    xhr.send(JSON.stringify(body));
+  }
+
+  function fmtTime(sec) {
+    if (sec === undefined || sec === null || sec < 0) { return ''; }
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + ' мин ' + s + ' с';
+  }
+
+  function renderTasks() {
+    var box = $('tasks');
+    if (!tasks.length) { box.innerHTML = '<div class="small">Пока пусто.</div>'; return; }
+    var html = '';
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      var st = states[t.id] || {};
+      var pct = st.pct || 0;
+      var line = st.text || 'Ожидание данных...';
+      html += '<div class="card">' +
+        '<div class="title">' + esc(t.title || ('Задача ' + t.id)) + '</div>' +
+        '<div class="bar"><div class="fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="small">' + esc(line) + '</div>' +
+        '<button data-act="pause" data-id="' + t.id + '" class="gray">Пауза</button>' +
+        '<button data-act="resume" data-id="' + t.id + '" class="gray">Продолжить</button>' +
+        '<button data-act="remove" data-id="' + t.id + '" class="red">Убрать</button>' +
+        '</div>';
+    }
+    box.innerHTML = html;
+  }
+
+  function renderSaved() {
+    var box = $('saved');
+    if (!saved.length) { box.innerHTML = '<div class="small">Пока пусто.</div>'; return; }
+    var html = '';
+    for (var i = 0; i < saved.length; i++) {
+      html += '<div class="card"><div class="small">' + esc(saved[i]) + '</div>' +
+        '<button data-act="use" data-i="' + i + '">Вставить</button>' +
+        '<button data-act="del" data-i="' + i + '" class="red">Удалить</button></div>';
+    }
+    box.innerHTML = html;
+  }
+
+  function install() {
+    var url = $('url').value.replace(/^\s+|\s+$/g, '');
+    if (!url) { setMsg('Введите ссылку.'); return; }
+    if (!/^https?:\/\//i.test(url)) { setMsg('Нужна ссылка, начинающаяся с http:// или https://'); return; }
+    setMsg('Отправка консоли... (может занять несколько секунд)');
+    api('/api/install', { type: 'direct', packages: [url] }, function (ok, data, text) {
+      if (ok && data.task_id !== undefined) {
+        tasks.push({ id: data.task_id, title: data.title || url });
+        store(KEY_TASKS, tasks);
+        setMsg('Задача создана: ' + (data.title || data.task_id));
+        renderTasks();
+        poll();
+      } else {
+        var err = (data && data.error) ? data.error : (text || 'Нет ответа от консоли.');
+        setMsg('Ошибка: ' + err);
+      }
+    });
+  }
+
+  function saveLink() {
+    var url = $('url').value.replace(/^\s+|\s+$/g, '');
+    if (!url) { setMsg('Введите ссылку.'); return; }
+    for (var i = 0; i < saved.length; i++) { if (saved[i] === url) { setMsg('Такая ссылка уже сохранена.'); return; } }
+    saved.push(url);
+    store(KEY_SAVED, saved);
+    renderSaved();
+    setMsg('Ссылка сохранена.');
+  }
+
+  function taskAction(act, id) {
+    var map = { pause: '/api/pause_task', resume: '/api/resume_task', remove: '/api/unregister_task' };
+    api(map[act], { task_id: id }, function (ok, data, text) {
+      if (act === 'remove') {
+        var keep = [];
+        for (var i = 0; i < tasks.length; i++) { if (tasks[i].id !== id) { keep.push(tasks[i]); } }
+        tasks = keep;
+        store(KEY_TASKS, tasks);
+        delete states[id];
+        renderTasks();
+      }
+      if (!ok && act !== 'remove') {
+        setMsg('Ошибка: ' + ((data && data.error) ? data.error : (text || 'нет ответа')));
+      }
+    });
+  }
+
+  function poll() {
+    for (var i = 0; i < tasks.length; i++) {
+      (function (id) {
+        api('/api/get_task_progress', { task_id: id }, function (ok, d) {
+          if (!ok || !d) { states[id] = { pct: 0, text: 'Нет данных (задача удалена или консоль не отвечает)' }; renderTasks(); return; }
+          var total = d.length_total || 0, done = d.transferred_total || 0;
+          var pct = total > 0 ? Math.min(100, Math.floor(done * 1000 / total) / 10) : 0;
+          var text = pct + '%';
+          if (d.error) { text += ' | ошибка консоли: ' + d.error; }
+          else if (total > 0 && done >= total) { text += ' | скачано, подготовка: ' + (d.preparing_percent < 0 ? 0 : d.preparing_percent) + '%'; }
+          else if (d.rest_sec >= 0) { text += ' | осталось ' + fmtTime(d.rest_sec); }
+          states[id] = { pct: pct, text: text };
+          renderTasks();
+        });
+      })(tasks[i].id);
+    }
+  }
+
+  document.addEventListener('click', function (ev) {
+    var el = ev.target;
+    var act = el.getAttribute ? el.getAttribute('data-act') : null;
+    if (!act) { return; }
+    if (act === 'use') { $('url').value = saved[parseInt(el.getAttribute('data-i'), 10)]; window.scrollTo(0, 0); return; }
+    if (act === 'del') { saved.splice(parseInt(el.getAttribute('data-i'), 10), 1); store(KEY_SAVED, saved); renderSaved(); return; }
+    taskAction(act, parseInt(el.getAttribute('data-id'), 10));
+  }, false);
+
+  $('btnInstall').onclick = install;
+  $('btnSave').onclick = saveLink;
+
+  renderTasks();
+  renderSaved();
+  poll();
+  window.setInterval(poll, 3000);
+})();
+</script>
+</body>
+</html>
