@@ -1,0 +1,64 @@
+name: Build RayBPS4 Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths-ignore:
+      - '**/*.md'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang and lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+
+      - name: Download the OpenOrbis toolchain release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/tags/v0.5.4 -o release.json
+          echo "Release assets:"
+          jq -r '.assets[] | "  \(.name)  (\(.size) bytes)"' release.json
+          url=$(jq -r '[.assets[] | select(.name | test("\\.tar\\.gz$"))][0].browser_download_url // empty' release.json)
+          if [ -z "$url" ]; then
+            echo "No .tar.gz asset found in the release, see the list above."
+            exit 1
+          fi
+          echo "Downloading $url"
+          mkdir -p toolchain
+          curl -fsSL "$url" | tar xz -C toolchain
+          linkx=$(find toolchain -name link.x | head -1)
+          if [ -z "$linkx" ]; then
+            echo "link.x not found inside the toolchain archive:"
+            find toolchain -maxdepth 3 | head -50
+            exit 1
+          fi
+          echo "OO_PS4_TOOLCHAIN=$(cd "$(dirname "$linkx")" && pwd)" >> "$GITHUB_ENV"
+
+      - name: Check the toolchain
+        run: |
+          echo "Toolchain: $OO_PS4_TOOLCHAIN"
+          ls "$OO_PS4_TOOLCHAIN"
+          ls "$OO_PS4_TOOLCHAIN/lib" | head -30
+          ls "$OO_PS4_TOOLCHAIN/bin/linux"
+
+      - name: Build the package
+        run: bash build_linux.sh
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RayBPS4-Installer-pkg
+          path: |
+            *.pkg
+            eboot.bin
+          if-no-files-found: error
