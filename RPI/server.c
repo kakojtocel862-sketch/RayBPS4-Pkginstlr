@@ -4,6 +4,7 @@
 #include "sfo.h"
 #include "http.h"
 #include "util.h"
+#include "ui_html.h"
 
 #include <dirent.h>
 #include <orbis/libkernel.h>
@@ -61,6 +62,7 @@ static bool handle_api_get_task_progress(sb_Stream* s, const char* method, const
 static bool handle_api_find_task(sb_Stream* s, const char* method, const char* path, char* in_data, size_t in_size);
 
 static bool handle_static(sb_Stream* s, const char* method, const char* path, char* in_data, size_t in_size);
+static bool handle_index(sb_Stream* s, const char* method, const char* path, char* in_data, size_t in_size);
 
 static void kick_error(sb_Stream* s, int code, const char* title, const char* error);
 static void kick_result_header_json(sb_Stream* s);
@@ -71,6 +73,8 @@ static void cleanup_temp_files(void);
 
 static const struct handler_desc s_get_handlers[] = {
 	{ "/static/", &handle_static, true },
+	{ "/", &handle_index, false },
+	{ "/index.html", &handle_index, false },
 };
 static const struct handler_desc s_post_handlers[] = {
 	{ "/api/install", &handle_api_install, false },
@@ -1451,6 +1455,8 @@ static bool handle_static(sb_Stream* s, const char* method, const char* path, ch
 		content_type = "application/json";
 	} else if (ends_with_nocase(real_path, ".png")) {
 		content_type = "image/png";
+	} else if (ends_with_nocase(real_path, ".html")) {
+		content_type = "text/html; charset=utf-8";
 	} else {
 		content_type = "application/octet-stream";
 	}
@@ -1570,4 +1576,19 @@ err:
 			EPRINTF("sceKernelClose failed: 0x%08X\n", ret);
 		}
 	}
+}
+
+static bool handle_index(sb_Stream* s, const char* method, const char* path, char* in_data, size_t in_size) {
+	(void)method;
+	(void)path;
+	(void)in_data;
+	(void)in_size;
+
+	sb_send_status(s, 200, "OK");
+	sb_send_header(s, "Content-Type", "text/html; charset=utf-8");
+	sb_send_header(s, "Cache-Control", "no-store");
+	sb_send_header(s, "Connection", "close");
+	sb_write(s, g_ui_html, sizeof(g_ui_html) - 1);
+
+	return true;
 }
